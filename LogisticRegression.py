@@ -1,17 +1,14 @@
-from pyspark.sql.functions import col, avg, when, count, udf, mean
 from pyspark.ml.feature import StringIndexer, VectorAssembler, MinMaxScaler
 from pyspark.ml.classification import LogisticRegression
-from pyspark.ml.evaluation import BinaryClassificationEvaluator
 from pyspark.sql.types import DoubleType
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import *
-import pyspark.sql.functions as F
+from pyspark.sql.functions import * 
 from pyspark.ml.evaluation import MulticlassClassificationEvaluator, BinaryClassificationEvaluator
-
+import matplotlib.pyplot as plt
+import random
 
 spark = SparkSession.builder.appName("Bank Marketing").getOrCreate()
 
-# Reading the CSV
 df = spark.read.csv("ML_hw_dataset.csv", header=True, inferSchema=True)
 
 num_cols = ['age', 'duration', 'campaign', 'pdays', 'previous', 'emp_var_rate', 'cons_price_idx', 'cons_conf_idx', 'euribor3m', 'nr_employed']
@@ -20,9 +17,14 @@ categorical_cols = [ 'marital', 'education', 'default', 'housing', 'loan', 'cont
 
 mean_values = df.select([mean(c).alias(c) for c in num_cols]).collect()[0].asDict()
 
-# For null values in columns with int and double type, replace with mod 
+# For null values in columns with int and double type, replace with mean
 for column in num_cols:
   df = df.withColumn(column, when(col(column).isNull(), mean_values[column]).otherwise(col(column)))
+# Handle categorical null values by replacing them with mode 
+for column in categorical_cols:
+  mode = df.groupBy(column).count().orderBy('count', ascending=False).limit(1).select(column).collect()[0][0]
+  print(f"item <{mode}> is most common in <{column}>Column")
+  df = df.fillna(mode, subset=column)
 
 # For null unkown valuse in columns with string type, if it was less than 100 remove and if it was more thanreplace with most common
 for column in str_cols:
@@ -35,12 +37,21 @@ for column in str_cols:
     print(f"------> {most_common} is the most common in column {column}")
     df = df.withColumn(column, when(col(column) == 'unknown', most_common).otherwise(col(column)))
 
+# BarChart for numeric cols
+for item in num_cols:
+  color = ["#"+''.join([random.choice('ABCDEF0123456789') for i in range(6)])]
+  df.toPandas().hist(column = item, grid=False, color = color)
+
+#Show Each value count for categorical cols
+for item in categorical_cols:
+  df.groupBy(item).count().orderBy(col("count").desc()).show() 
+
 # Change categortical values to numeric
 for column in categorical_cols:
   indexer = StringIndexer(inputCol=column, outputCol=column+"_index")
   df = indexer.fit(df).transform(df)
 
-#Checking correlation between features
+#Checking correlation between features and label
 corr_df = df.select(corr('age', 'y').alias('age_y'),
                     corr('marital_index', 'y').alias('marital_index_y'),
                     corr('education_index', 'y').alias('education_index_y'),
@@ -54,7 +65,9 @@ corr_df = df.select(corr('age', 'y').alias('age_y'),
                     corr('emp_var_rate', 'y').alias('emp_var_rate_y'),
                     corr('cons_price_idx', 'y').alias('cons_price_idx_y'),
                     corr('cons_conf_idx', 'y').alias('cons_conf_idx_y'),
-                    corr('euribor3m', 'y').alias('euribor3m_y'))
+                    corr('euribor3m', 'y').alias('euribor3m_y'),
+                    corr('nr_employed', 'y').alias('nr_employed')
+                    )
                     
 corr_df.show()
 
@@ -67,6 +80,7 @@ sns.heatmap(corr_df.toPandas(), annot=True, cmap='coolwarm')
 plt.title('Correlation between features and label')
 plt.show()
 
+#Checking correlation between features
 corr_all = df.select("y", "age","marital_index", "education_index", "housing_index", "loan_index", "contact_index", "duration", "campaign", "pdays", "previous", "emp_var_rate", "cons_price_idx", "cons_conf_idx", "euribor3m", "nr_employed").toPandas()
 corr = corr_all.corr()
 
@@ -75,8 +89,8 @@ sns.heatmap(corr, annot=True, cmap='coolwarm')
 plt.title('Correlation between features')
 plt.show()
 
-#Normalizing numeric columns to [0,1]
-assembler = VectorAssembler(inputCols=["age", "duration", "campaign", "pdays", "previous", "emp_var_rate", "cons_price_idx", "cons_conf_idx", "euribor3m", "nr_employed"], outputCol="features")
+# Create feature col with Selected columns and then normalize it
+assembler = VectorAssembler(inputCols=["duration", "pdays", "previous", "emp_var_rate", "cons_price_idx", "euribor3m", "nr_employed"], outputCol="features")
 df = assembler.transform(df)
 scaler = MinMaxScaler(inputCol="features", outputCol="scaled_features")
 scaler_model = scaler.fit(df)
@@ -84,18 +98,8 @@ df = scaler_model.transform(df)
 
 df.toPandas().to_csv('bank.csv')
 
-#Feature engineering
-df = df.withColumn("age_squared", col("age") ** 2)
-df = df.withColumn("duration_squared", col("duration") ** 2)
-df = df.withColumn("campaign_squared", col("campaign") ** 2)
-df = df.withColumn("previous_squared", col("previous") ** 2)
-df = df.withColumn("pdays_10", when(col("pdays") <= 10, 1).otherwise(0))
-df = df.withColumn("pdays_20", when((col("pdays") > 10) & (col("pdays") <= 20), 1).otherwise(0))
-df = df.withColumn("pdays_30", when(col("pdays") > 20, 1).otherwise(0))
-
-
 #Selecting relevant columns for logistic regression
-df = df.select("scaled_features", "age" ,"age_squared", "duration", "duration_squared", "campaign", "campaign_squared", "previous", "previous_squared", "pdays_10", "pdays_20", "pdays_30", "y")
+df = df.select("scaled_features", "duration", "campaign", "previous", "pdays", "emp_var_rate", "cons_price_idx", "euribor3m", "nr_employed", "y")
 
 #Splitting the data into training and testing sets
 train_data, test_data = df.randomSplit([0.7, 0.3], seed=42)
