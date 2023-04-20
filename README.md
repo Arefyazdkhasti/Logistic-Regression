@@ -1,2 +1,2 @@
-# Logistic-Regression
-Implementation of Logistic Regression in pyspark
+# Logistic-Regression and SVM
+Implementation of Logistic Regression and SVM in pyspark
